@@ -1,0 +1,21 @@
+# Private working notes / AI instructions — not committed.
+claude.md
+
+# Datasets — not committed. See README for how to fetch KITTI data.
+data/
+
+# Go
+*.exe
+*.out
+bin/
+# compiled binary (regenerable via `go build`/`go run`)
+ingestion/ingestion
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# OS / editor
+.DS_Store
