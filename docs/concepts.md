@@ -274,3 +274,40 @@ between events.
 **One sentence:** Python sends events as a newline-separated byte stream → `bufio.Reader`
 buffers it → `ReadString('\n')` chops off one event's text → `Unmarshal` fills the struct
 via the tags → we read the fields like normal variables.
+
+## Redis (and why we use a queue in the middle)
+
+**Redis** is a super-fast data store that keeps everything in **memory (RAM)**, which makes
+it blazingly fast. It's used for caching, sessions, real-time counters, and — what we use —
+**queues**. The specific feature is **Redis Streams**: a **waiting line** programs drop
+items into and pull items out of.
+
+**Why our pipeline needs a queue in the middle:** two sides run at different speeds.
+- **Ingestion** (receiving events) is **fast**.
+- **The worker** (saving each event to a database + storage) is **slower**.
+
+Connect them directly and ingestion has to wait for the worker on every event → the whole
+system crawls at the speed of the slowest part, and bursts overwhelm the worker. A queue in
+the middle **decouples** them: ingestion drops events in quickly and moves on; the worker
+pulls them out at its own pace.
+
+**Restaurant analogy:** waiters take orders fast (ingestion), the kitchen cooks at its own
+pace (worker), and between them is a **rail of order tickets** (the queue). Waiters clip a
+ticket and move on instead of waiting for each dish.
+
+**The three big wins:**
+1. **Decoupling** — the two sides run independently, each at its own speed.
+2. **Buffering bursts** — a flood of events piles up safely in the queue.
+3. **Resilience** — if the worker **crashes mid-processing**, unfinished events are **still
+   in the queue**, not lost. On restart it picks them back up. *This is what makes the chaos
+   test work: kill the worker → Redis re-delivers unacknowledged events → zero data loss.*
+
+**Why Redis specifically:** fast, simple, widely used, and Redis Streams gives durability +
+**acknowledgment** (the worker acknowledges an event only after it's safely saved — enabling
+crash recovery). Chosen **over Kafka**, which is heavier and more complex than we need.
+(See [design-decisions.md](design-decisions.md).)
+
+**How it ties to the pool:** the ingestion service's pool holds connections **to Redis**.
+Many event-handlers share that small bounded set of Redis connections instead of each
+opening its own. (The temporary "sink" server on port 9001 is a stand-in for Redis during
+development.)

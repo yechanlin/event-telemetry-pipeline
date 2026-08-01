@@ -5,6 +5,9 @@ import (
 	"encoding/json" // Go's JSON reader/writer
 	"fmt"
 	"net"
+	"time"
+
+	"ingestion/pool" // our hand-built connection pool
 )
 
 // TelemetryEvent is the shape of the JSON the Python simulator sends.
@@ -29,6 +32,14 @@ func main() {
 	defer listener.Close()
 	fmt.Println("ingestion service listening on port 9000")
 
+	// Create a pool of reusable connections to the downstream sink (later: Redis).
+	p, err := pool.New("localhost:9001", 5)
+	if err != nil {
+		fmt.Println("could not build connection pool:", err)
+		return
+	}
+	fmt.Println("connection pool ready:", p.Available(), "connections to downstream")
+
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -36,11 +47,11 @@ func main() {
 			continue
 		}
 		fmt.Println("simulator connected")
-		go handle(conn)
+		go handle(conn, p)
 	}
 }
 
-func handle(conn net.Conn) {
+func handle(conn net.Conn, p *pool.Pool) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
 
@@ -59,9 +70,28 @@ func handle(conn net.Conn) {
 			fmt.Println("could not parse event:", err)
 			continue // skip a bad line, keep going
 		}
-
 		count++
-		fmt.Printf("event #%d: frame=%d speed=%.2f m/s sats=%d\n",
-			count, event.Frame, event.SpeedMPS, event.NumSatellites)
+
+		// Forward the event downstream through the pool.
+		if err := forward(p, line); err != nil {
+			fmt.Println("could not forward event:", err)
+			continue
+		}
 	}
+}
+
+// forward sends one event downstream, borrowing a connection from the pool.
+func forward(p *pool.Pool, line string) error {
+	conn, err := p.Acquire(2 * time.Second) // borrow a phone from the rack
+	if err != nil {
+		return err // pool was saturated and we timed out
+	}
+
+	if _, err := conn.Write([]byte(line)); err != nil {
+		p.Discard(conn) // the line broke — throw it away, dial a fresh one
+		return err
+	}
+
+	p.Release(conn) // done — put the phone back on the rack
+	return nil
 }

@@ -114,3 +114,30 @@ service (receive + count). Test data flowing end to end.
 
 **Next up (Week 2 — the centerpiece):** the hand-built TCP connection pool, integrated into
 the ingestion service. This is the core of the whole project.
+
+---
+
+## 2026-07-30 — Built the connection pool (centerpiece) and integrated it — data flows through it
+- Learned **channels** (Go's thread-safe pipe between goroutines) and the "buffered channel
+  = bowl of keys" model: receiving blocks when empty (backpressure), safe under concurrency,
+  capacity = the pool's max size. (See [concepts.md](concepts.md).)
+- Built the pool step by step, each mechanic understood and demo'd:
+  - **Make the bowl + fill it** with real dialed connections (`New`).
+  - **Take & return** (`Acquire` / `Release`).
+  - **Wait when empty** = backpressure (channel receive blocks). Saw a race between
+    goroutines live, and learned `len()` of a shared channel is a fleeting snapshot.
+  - **Timeouts** via `select` + `time.After` — a saturated pool sheds load instead of
+    hanging forever; `Acquire` now returns an error.
+  - **Broken lines** (`Discard`) — close a dead connection and dial a fresh replacement so
+    the pool stays full and never hands out a poisoned line.
+  - **Many workers at once** — safe by the channel's design.
+- Turned the pool into a proper **package** (`ingestion/pool/`, `package pool`, exported
+  API: `New`/`Acquire`/`Release`/`Discard`/`Available`). Deleted the throwaway `pool/` lab.
+- Built a tiny **downstream sink** (`scratch/sink/`, port 9001) as a stand-in for Redis.
+- **Integrated the pool into the ingestion service**: each received event is forwarded
+  downstream via `forward()` = borrow a pooled conn → `Write` → `Release` (or `Discard` on
+  error). Ran sink + ingestion + simulator together — 108 real KITTI events flowed through
+  just **5 pooled connections**, end to end.
+
+**Next up:** replace the sink with real **Redis Streams**, then build the Go **processing
+worker** (reads from Redis → PostgreSQL + object storage), then wire it all with Docker Compose.
