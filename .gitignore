@@ -8,8 +8,9 @@ data/
 *.exe
 *.out
 bin/
-# compiled binary (regenerable via `go build`/`go run`)
+# compiled binaries (regenerable via `go build`/`go run`)
 ingestion/ingestion
+worker/worker
 
 # Python
 __pycache__/

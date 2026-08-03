@@ -311,3 +311,25 @@ crash recovery). Chosen **over Kafka**, which is heavier and more complex than w
 Many event-handlers share that small bounded set of Redis connections instead of each
 opening its own. (The temporary "sink" server on port 9001 is a stand-in for Redis during
 development.)
+
+## "Isn't Redis just a cache?" — cache vs. queue
+
+Redis is famous as a **cache**, but that's just its most popular use — not what it *is*.
+Redis is a general-purpose in-memory store with many data structures (cache, queue,
+sessions, rate limiter, leaderboards…). We use its **Streams** feature as a **queue**.
+
+**Cache and queue solve opposite problems:**
+
+| | Cache | Queue (what we use) |
+|---|---|---|
+| Purpose | Keep a fast copy of data I'll **read again** | Hold a **line of work items** to process |
+| Data flow | Same data read **many times** (for speed) | Each item flows through **once** |
+| Everyday analogy | Sticky note with a phone number you reuse | Restaurant ticket rail — each ticket cooked once, then cleared |
+
+**Which are we doing? A queue.** Ingestion *drops* each event in; the worker *takes each
+event out and processes it once*. We are NOT re-reading the same event for speed (that's a
+cache) — we're holding a line of events waiting to be saved.
+
+**Interview line:** "Redis isn't just a cache — it's a general-purpose in-memory store. I'm
+using its Streams data structure as a durable queue between ingestion and the worker, not as
+a read cache."

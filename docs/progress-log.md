@@ -141,3 +141,43 @@ the ingestion service. This is the core of the whole project.
 
 **Next up:** replace the sink with real **Redis Streams**, then build the Go **processing
 worker** (reads from Redis → PostgreSQL + object storage), then wire it all with Docker Compose.
+
+---
+
+## 2026-08-02 — Wired ingestion to real Redis (over the hand-built pool, hand-written RESP)
+- Ran **Redis in Docker** (`docker run -d --name redis -p 6379:6379 redis`) — first real
+  container. Learned Docker Hub / images / port mapping, and Redis Streams by hand
+  (`XADD` / `XLEN` / `XRANGE` in `redis-cli`).
+- Learned the **RESP wire protocol** (length-prefixed array of bulk strings) and the
+  cache-vs-queue distinction. (See [concepts.md](concepts.md).)
+- **Decision:** keep the hand-built pool and speak RESP ourselves rather than use `go-redis`
+  (which has its own pool) — preserves the centerpiece. (See [design-decisions.md](design-decisions.md).)
+- Pointed the pool at Redis (`localhost:6379`) and rewrote `forward()` to send
+  `XADD events * data <json>` in hand-encoded RESP over a pooled connection, then read
+  Redis's reply. New file `ingestion/redis.go`: `buildXADD` (RESP encoder) + `readReply`
+  (RESP reply parser).
+- Verified end to end: ran ingestion + simulator → **108 real KITTI events stored in the
+  `events` stream** (`XLEN` = 108; `XRANGE` shows frame 0 with the exact original values).
+- Retired the toy sink — Redis replaces it.
+
+**Next up:** the Go **processing worker** — read events from the Redis stream and save them
+to PostgreSQL + object storage, with consumer-group acknowledgment for crash recovery.
+
+---
+
+## 2026-08-02 — Worker reads Redis → saves to PostgreSQL (full pipeline works end to end)
+- Built the Go **worker** (`worker/`, its own module): connects to Redis with **go-redis**
+  (first outside library — used on the read side per the design decision), reads the `events`
+  stream with `XRead`, parses each entry's JSON, and inserts a row into Postgres.
+- Ran **Postgres in Docker** (`etp-postgres`, db `telemetry`). Worker creates the
+  `telemetry_events` table on startup (`CREATE TABLE IF NOT EXISTS`) and inserts with
+  **parameterized queries** (`$1..$9` — safe against SQL injection) via **pgx**.
+- Debugged a real **port conflict**: a native Mac Postgres owned `localhost:5432` and shadowed
+  our container (error `role "postgres" does not exist` = reached the wrong Postgres). Fixed by
+  remapping our container to host port **5434**.
+- Verified end to end: **216 rows in `telemetry_events`** — the full path works:
+  simulator → ingestion → pool → Redis → worker → Postgres.
+
+**Next up:** worker also writes raw payloads to **object storage**; then **consumer groups +
+acknowledgment** (so re-running/crash doesn't duplicate or lose events) for the chaos test;
+then **Docker Compose** to run the whole stack with one command.

@@ -69,8 +69,11 @@ an interview.
 ```
 ✅ Real KITTI telemetry flowing Python → Go               (Week 1 — done)
 ✅ Hand-built connection pool — all mechanics built       (Week 2 — done)
-✅ Plug pool into ingestion → real data through the pool  (done — the "it got real" moment)
-⬜ Redis + worker + Postgres/storage                       (the full pipeline)  ← next
+✅ Plug pool into ingestion → real data through the pool  (done)
+✅ Ingestion → Redis Streams (over the hand-built pool)   (done)
+✅ Worker: Redis → PostgreSQL                             (done — full pipeline works!)
+🔨 Worker: also write raw payloads to object storage      ← next
+⬜ Consumer groups + acknowledgment (crash recovery)
 ⬜ Docker Compose (one-command run)
 ⬜ k6 load test → the NUMBERS
 ⬜ Grafana dashboards + alert

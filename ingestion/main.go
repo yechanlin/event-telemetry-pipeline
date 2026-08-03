@@ -5,6 +5,7 @@ import (
 	"encoding/json" // Go's JSON reader/writer
 	"fmt"
 	"net"
+	"strings"
 	"time"
 
 	"ingestion/pool" // our hand-built connection pool
@@ -32,13 +33,13 @@ func main() {
 	defer listener.Close()
 	fmt.Println("ingestion service listening on port 9000")
 
-	// Create a pool of reusable connections to the downstream sink (later: Redis).
-	p, err := pool.New("localhost:9001", 5)
+	// Create a pool of reusable connections to Redis.
+	p, err := pool.New("localhost:6379", 5)
 	if err != nil {
 		fmt.Println("could not build connection pool:", err)
 		return
 	}
-	fmt.Println("connection pool ready:", p.Available(), "connections to downstream")
+	fmt.Println("connection pool ready:", p.Available(), "connections to Redis")
 
 	for {
 		conn, err := listener.Accept()
@@ -80,18 +81,26 @@ func handle(conn net.Conn, p *pool.Pool) {
 	}
 }
 
-// forward sends one event downstream, borrowing a connection from the pool.
+// forward sends one event to Redis (XADD), borrowing a connection from the pool.
 func forward(p *pool.Pool, line string) error {
-	conn, err := p.Acquire(2 * time.Second) // borrow a phone from the rack
+	conn, err := p.Acquire(2 * time.Second) // borrow a connection from the pool
 	if err != nil {
 		return err // pool was saturated and we timed out
 	}
 
-	if _, err := conn.Write([]byte(line)); err != nil {
-		p.Discard(conn) // the line broke — throw it away, dial a fresh one
+	// Send "XADD events * data <json>" encoded in Redis's RESP wire format.
+	payload := strings.TrimRight(line, "\r\n") // drop the newline delimiter
+	if _, err := conn.Write([]byte(buildXADD("events", payload))); err != nil {
+		p.Discard(conn) // the connection broke — throw it away, dial a fresh one
 		return err
 	}
 
-	p.Release(conn) // done — put the phone back on the rack
+	// Read Redis's reply (the new entry ID) so the connection stays reusable.
+	if _, err := readReply(bufio.NewReader(conn)); err != nil {
+		p.Discard(conn)
+		return err
+	}
+
+	p.Release(conn) // done — put the connection back in the pool
 	return nil
 }
