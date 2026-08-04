@@ -75,7 +75,7 @@ an interview.
 ✅ Worker: also write raw payloads to object storage      (done — MinIO/S3, data-lake pattern)
 ✅ Docker Compose (one-command run)                       (Week 2 — done! whole stack, one command)
 ⬜ Consumer groups + acknowledgment (crash recovery)       (Week 3, with the chaos test)
-⬜ k6 load test → the NUMBERS
+✅ Load test → the NUMBERS (~55K ev/s, p99 <2ms, ~7× vs per-dial)  (done — Go load-gen)
 ⬜ Grafana dashboards + alert
 ⬜ Chaos test → resilience story
 ⬜ K8s + README + demo video + final resume bullets

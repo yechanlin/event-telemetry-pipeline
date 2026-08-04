@@ -177,3 +177,23 @@ formalizes with probes — a direct bridge to the K8s work later. (See [concepts
 `localhost:9000`) — deliberate, since real sensors live outside the backend. Also, redis/minio
 use only `service_started` (they come up near-instantly); a fully rigorous setup would give
 them healthchecks too — noted, not needed to work.
+
+## Load testing: a custom Go load generator, not k6
+
+**Choice:** Measure pool performance with a small hand-written **Go** load generator
+(`ingestion/loadtest/`), not **k6** (which the original plan named).
+
+**Why:** k6 speaks **HTTP**, but the ingestion service (and the pool's forward path) speaks
+**raw TCP + RESP** — k6 can't drive that without a plugin. A tiny Go client is the right tool
+for a raw-TCP service and gives precise control over the one comparison that matters:
+**pooled connection reuse vs. dialing a fresh connection per event**, identical otherwise.
+(Interview line: "I picked the tool that matched the protocol.")
+
+**What we measured (localhost, Redis in Docker, 20k events, 50 concurrent senders):** pooled
+sustained **~55K events/sec at p99 <2ms**, **~7×** the throughput of per-request dialing.
+Per-dial also **collapsed under sustained load from ephemeral-port (TIME_WAIT) exhaustion** —
+a live demonstration of why connection pools exist. (See [progress-log.md](progress-log.md).)
+
+**Trade-off we accept:** a localhost benchmark overstates *absolute* throughput vs. a real
+network; the honest, defensible headline is the **pooled-vs-perdial ratio**, since both ran
+under identical conditions.

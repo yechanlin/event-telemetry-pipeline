@@ -217,3 +217,28 @@ then **Docker Compose** to run the whole stack with one command.
 **Next up (Week 3 — production polish):** **consumer groups + acknowledgment** (so a crash
 doesn't lose or duplicate events) for the **chaos test**; then **Prometheus + Grafana** with
 one real alert, a **k6 load test** for the numbers, and a minimal **Kubernetes** deployment.
+
+---
+
+## 2026-08-03 — Load-tested the pool: real numbers + a live port-exhaustion finding
+- Built a small Go load generator (`ingestion/loadtest/`) that hammers the forward path
+  (`XADD` → Redis) with many concurrent senders and reports **throughput + p50/p95/p99
+  latency**. Two modes via a flag: **`pooled`** (reuse pooled connections) vs. **`perdial`**
+  (dial a fresh TCP connection per event) — same payload, same concurrency, so the gap
+  isolates exactly the cost the pool removes: **per-event connection setup**.
+- Ran 20,000 events at 50 concurrent senders against the Compose Redis:
+  - **Pooled:** stable **~54K–64K events/sec**, **p99 ~1.4–1.6ms** across 3 runs.
+  - **Per-dial:** **~7,800 events/sec**, p99 ~27ms at best → **~7× slower** throughput.
+- **Live finding (the best interview story):** on a repeat run, per-dial **collapsed to
+  640 events/sec and dropped ~7,400 of 20,000 events** — **ephemeral-port / TIME_WAIT
+  exhaustion**. Closed connections sit in TIME_WAIT (~30–60s) holding their port; rapidly
+  opening/closing tens of thousands exhausts the ~16k ephemeral ports and new dials fail.
+  The pool never hits this — it reuses a fixed 50 connections forever. *This is the textbook
+  reason connection pools exist, seen live.*
+- **Honesty note:** localhost benchmark (single machine, Redis in Docker), so absolute
+  throughput is optimistic vs. a real network — but the **~7× pooled-vs-perdial comparison**
+  is the defensible headline since both ran under identical conditions.
+- **Resume numbers (conservative):** ~55K events/sec, p99 <2ms, ~7× vs per-request dialing.
+
+**Next up:** **consumer groups + acknowledgment** (crash-safe processing) → the **chaos test**
+(kill the worker mid-processing, prove zero data loss), then Prometheus/Grafana + K8s.
