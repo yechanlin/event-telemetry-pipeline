@@ -129,3 +129,51 @@ but that *is* the point of the exercise.
 **Note:** the *worker* (consumer side) may still use `go-redis` for consumer-group reads
 (`XREADGROUP`), where hand-rolling consumer-group semantics would be pointless complexity
 (breadth, not depth). The hand-built pool lives on the *write* path, which stays pure.
+
+## Object storage: MinIO (self-hosted S3), not real AWS S3
+
+**Choice:** Store the raw JSON payloads in **MinIO**, an S3-compatible object store running
+as a local container — not real AWS S3.
+
+**Why:** MinIO speaks the **exact same API as S3**, so the code (`minio-go` SDK, `PutObject`,
+buckets/keys) is identical to what you'd write against real S3 — but it runs locally, free,
+with no AWS account or credentials to manage. Swapping to real S3 later is a config change
+(endpoint + creds), not a code change. This keeps the project **fully runnable from `docker
+compose up`** with nothing external, which is a core goal. Real S3 would add cloud setup,
+cost, and network dependence for zero learning gain here. (Terraform/cloud deploy is
+explicitly out of scope — Future Work.)
+
+**Trade-off we accept:** not exercising real-cloud concerns (IAM, regions, egress cost). Noted
+as Future Work; the S3-compatible API means the leap is small.
+
+## Save each event to BOTH Postgres and object storage (the data-lake pattern)
+
+**Choice:** The worker writes every event to **Postgres** (a structured row) **and** to
+**object storage** (the raw JSON blob) — deliberately keeping two copies.
+
+**Why:** They serve different needs. Postgres gives **queryable structured data** (you chose
+the columns up front). Object storage keeps the **untouched raw bytes** so you can
+**reprocess** later if you need a field you didn't model — the classic **data-lake** idea
+(structured warehouse + raw lake). This mirrors how real AV/telemetry pipelines retain raw
+sensor data. (See [concepts.md](concepts.md).)
+
+**Trade-off we accept:** storing the data twice. Cheap and worth it — object storage is
+inexpensive, and the raw copy is the safety net against "we should have kept that field."
+
+## Run the whole stack with Docker Compose; gate startup with a healthcheck
+
+**Choice:** Wire all five services (redis, postgres, minio, ingestion, worker) in one
+`docker-compose.yml`, and make the worker wait for Postgres via a **healthcheck** +
+`depends_on: condition: service_healthy` — not just `service_started`.
+
+**Why:** One `docker compose up` is the "clone → run" promise, and service-name networking
+(`redis:6379`, `postgres:5432`) keeps the services decoupled. `depends_on` alone only waits
+for a container to *start*, not to be *ready* — which caused a real `connection refused` race
+(worker beat Postgres's init). A healthcheck (`pg_isready`) gates the worker until Postgres
+truly accepts connections. This is the **liveness-vs-readiness** distinction Kubernetes
+formalizes with probes — a direct bridge to the K8s work later. (See [concepts.md](concepts.md).)
+
+**Trade-off we accept:** the simulator stays *outside* Compose (runs on the host, connects to
+`localhost:9000`) — deliberate, since real sensors live outside the backend. Also, redis/minio
+use only `service_started` (they come up near-instantly); a fully rigorous setup would give
+them healthchecks too — noted, not needed to work.

@@ -5,11 +5,21 @@ import (
 	"encoding/json" // Go's JSON reader/writer
 	"fmt"
 	"net"
+	"os"
 	"strings"
 	"time"
 
 	"ingestion/pool" // our hand-built connection pool
 )
+
+// getenv returns the environment variable `key`, or `fallback` if it's unset/empty.
+// Lets the same binary run locally (defaults) or in Docker Compose (env overrides).
+func getenv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
 
 // TelemetryEvent is the shape of the JSON the Python simulator sends.
 // The `json:"..."` tags map each JSON key to a field.
@@ -34,7 +44,7 @@ func main() {
 	fmt.Println("ingestion service listening on port 9000")
 
 	// Create a pool of reusable connections to Redis.
-	p, err := pool.New("localhost:6379", 5)
+	p, err := pool.New(getenv("REDIS_ADDR", "localhost:6379"), 5)
 	if err != nil {
 		fmt.Println("could not build connection pool:", err)
 		return

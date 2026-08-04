@@ -181,3 +181,39 @@ to PostgreSQL + object storage, with consumer-group acknowledgment for crash rec
 **Next up:** worker also writes raw payloads to **object storage**; then **consumer groups +
 acknowledgment** (so re-running/crash doesn't duplicate or lose events) for the chaos test;
 then **Docker Compose** to run the whole stack with one command.
+
+---
+
+## 2026-08-03 — Object storage (MinIO) + Docker Compose: the whole stack runs with one command
+- Added the **object-storage** half of the worker: each event now saves to **both**
+  Postgres (a structured row) **and** MinIO (the raw JSON blob), using the **minio-go** SDK
+  (`PutObject` into the `telemetry-raw` bucket, key `events/<id>.json`). This is the
+  **data-lake pattern** — structured data for queries, raw data kept for reprocessing.
+  (See [concepts.md](concepts.md).) Chose **MinIO** (S3-compatible, runs locally) over real
+  S3. (See [design-decisions.md](design-decisions.md).)
+- Made both Go services **configurable via environment variables** (`REDIS_ADDR`,
+  `POSTGRES_URL`, `MINIO_ENDPOINT`) with `localhost` defaults — so the same binary runs
+  locally *or* inside Compose (12-factor style). Added a small `getenv(key, fallback)` helper.
+- Wrote **Dockerfiles** for ingestion and worker: **multi-stage builds** (compile in a
+  `golang` image, copy just the tiny static binary into a bare `alpine` image → small,
+  clean final images).
+- Wrote **`docker-compose.yml`** wiring all 5 services — redis, postgres, minio, ingestion,
+  worker — on one private network. Services find each other by **service name** (e.g.
+  `redis:6379`), which is why the env-var work mattered. Inside Compose the ports go back to
+  normal (5432, 9000); the odd host ports (5434, 9100) were only to dodge conflicts on the Mac.
+- Hit the **`depends_on` race live**: the worker started before Postgres was *ready* and
+  died with `connection refused` (a clean `Exited (0)` — our code prints and returns).
+  **Fixed it with a healthcheck** (`pg_isready`) + `depends_on: condition: service_healthy`,
+  so the worker waits until Postgres actually accepts connections. This is the
+  **started-vs-ready / liveness-vs-readiness** idea — the same probes Kubernetes uses.
+  (See [concepts.md](concepts.md).)
+- Debugged two real gotchas: host **port 9000 already in use** (a stray local `ingestion`
+  binary from earlier testing — found with `lsof -i :9000`, killed it), and the
+  **`docker compose exec` vs `docker exec` naming** difference (service name `postgres` vs
+  full container name `event-telemetry-pipeline-postgres-1`).
+- Verified end to end **inside Compose**: `docker compose up` → ran the simulator → real
+  KITTI events flowed the whole path and landed in Postgres + MinIO. **Week 2 done.**
+
+**Next up (Week 3 — production polish):** **consumer groups + acknowledgment** (so a crash
+doesn't lose or duplicate events) for the **chaos test**; then **Prometheus + Grafana** with
+one real alert, a **k6 load test** for the numbers, and a minimal **Kubernetes** deployment.

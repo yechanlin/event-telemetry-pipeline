@@ -72,9 +72,9 @@ an interview.
 ✅ Plug pool into ingestion → real data through the pool  (done)
 ✅ Ingestion → Redis Streams (over the hand-built pool)   (done)
 ✅ Worker: Redis → PostgreSQL                             (done — full pipeline works!)
-🔨 Worker: also write raw payloads to object storage      ← next
-⬜ Consumer groups + acknowledgment (crash recovery)
-⬜ Docker Compose (one-command run)
+✅ Worker: also write raw payloads to object storage      (done — MinIO/S3, data-lake pattern)
+✅ Docker Compose (one-command run)                       (Week 2 — done! whole stack, one command)
+⬜ Consumer groups + acknowledgment (crash recovery)       (Week 3, with the chaos test)
 ⬜ k6 load test → the NUMBERS
 ⬜ Grafana dashboards + alert
 ⬜ Chaos test → resilience story
@@ -83,3 +83,6 @@ an interview.
 
 The pool — the hardest, most impressive part — is essentially built. The "toy demo"
 feeling ends the moment real telemetry flows through the pool.
+
+**Week 2 complete:** the entire pipeline now runs from a single `docker compose up`, with
+real KITTI telemetry flowing simulator → ingestion → pool → Redis → worker → Postgres + MinIO.

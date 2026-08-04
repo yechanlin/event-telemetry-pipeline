@@ -333,3 +333,80 @@ cache) — we're holding a line of events waiting to be saved.
 **Interview line:** "Redis isn't just a cache — it's a general-purpose in-memory store. I'm
 using its Streams data structure as a durable queue between ingestion and the worker, not as
 a read cache."
+
+## Object storage + the data-lake pattern (why save the SAME event twice)
+
+The worker saves each event to **two** places: a **row in Postgres** *and* the **raw JSON
+blob in object storage** (MinIO). That sounds redundant — why keep both?
+
+Because they answer different questions:
+
+- **Postgres (a database)** — structured rows with columns. Great for **queries**:
+  "average speed", "events where satellites < 6". But you had to *pick the columns up front*,
+  so anything you didn't model is lost.
+- **Object storage (MinIO / S3)** — just a giant bucket of files ("objects"), each with a
+  name (a "key" like `events/1690…-0.json`). No columns, no schema — it stores the **exact
+  original bytes**. Cheap, endless, but you can't run rich queries over it.
+
+**Keeping the raw copy is the "data lake" idea:** store the untouched original so you can
+**reprocess it later** — if you realize next month you need a field you didn't put in
+Postgres, it's still in the raw blob. The database is the *cooked* data; the lake is the
+*raw ingredients* you never throw away.
+
+**Fridge analogy:** Postgres is **meals you prepped into labeled containers** (fast to grab
+exactly what you want). Object storage is the **pantry of raw ingredients** (bulky, but you
+can cook anything later). Real pipelines keep both.
+
+**MinIO** is software that speaks the **same API as Amazon S3**, but runs on your own
+laptop/servers — so we get the real S3 experience locally, free, and could swap to actual S3
+later by changing config. (See [design-decisions.md](design-decisions.md).)
+
+## Docker Compose: a dependency graph, not a top-to-bottom script
+
+`docker compose up` does **not** run the YAML file line by line like a script. The **order
+services appear in the file doesn't matter.** Compose reads the whole file, builds a
+**dependency graph** from the `depends_on` sections ("who needs whom"), then starts things in
+**waves — as much in parallel as it can.**
+
+**Cooking analogy:** you don't boil water, *then* chop onions, *then* stir — you boil water
+*and* chop onions at the same time, and only drain the pasta once the water has actually
+boiled. Compose does everything it can at once, but respects "can't start X until Y is ready."
+
+For our stack: redis, postgres, minio have no dependencies → they start together in wave 1;
+ingestion starts once redis has; **worker waits** for all three (its `depends_on`).
+
+## "Started" vs. "healthy" — liveness vs. readiness
+
+`depends_on` can wait two different amounts, and the difference caused a real bug:
+
+- **`service_started`** — "the container has been launched." Docker started the process;
+  it does **not** check whether the program inside is actually ready to do work.
+- **`service_healthy`** — "the container's **healthcheck** is passing." Compose keeps the
+  dependent service waiting until the check succeeds.
+
+**The bug we hit:** the worker depended on Postgres with only `started`. Postgres's container
+launched instantly, but a fresh Postgres needs a few seconds to initialize before it accepts
+connections. The worker raced ahead, got **`connection refused`**, and exited. (Cleanly —
+`Exited (0)` — because our `main()` prints the error and returns, so Compose didn't restart it.)
+
+**The fix — a healthcheck:** give Postgres a tiny command Docker runs on a loop to ask "ready
+yet?":
+```yaml
+healthcheck:
+  test: ["CMD-SHELL", "pg_isready -U postgres"]  # Postgres's built-in "are you ready?" tool
+  interval: 2s     # ask every 2 seconds
+  timeout: 3s      # each check must answer within 3s
+  retries: 10      # unhealthy only after 10 failures in a row
+```
+Then the worker waits on `condition: service_healthy` instead of `service_started`. It now
+pauses a couple seconds until Postgres reports **Healthy**, then starts cleanly — no more
+`connection refused`.
+
+**Door-open vs. someone-answering analogy:** "started" = the restaurant unlocked its door;
+"healthy" = someone's actually at the phone to take your order. Calling the instant the door
+unlocks gets you silence.
+
+**Interview line (this is a strong one):** "started vs. healthy is the difference between a
+**liveness** signal and a **readiness** signal — the exact idea Kubernetes formalizes with
+liveness and readiness probes. I hit the startup race, then fixed it with a Postgres
+healthcheck gating the worker's `depends_on`."

@@ -1,0 +1,52 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"          # host:container, so you can peek from your Mac
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: telemetry
+    ports:
+      - "5434:5432"          # host 5434 -> container 5432 (avoids your native Postgres)
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]  # are you ready to accept connections?
+      interval: 2s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9100:9000"          # API   (host 9100 -> container 9000)
+      - "9101:9001"          # console UI
+
+  ingestion:
+    build: ./ingestion
+    depends_on:
+      - redis
+    environment:
+      REDIS_ADDR: redis:6379
+    ports:
+      - "9000:9000"          # so the simulator on your Mac can reach it
+
+  worker:
+    build: ./worker
+    depends_on:
+      redis:
+        condition: service_started # redis is ready the moment it starts
+      postgres:
+        condition: service_healthy # WAIT until the healthy passes
+      minio:
+        condition: service_started
+    environment:
+      REDIS_ADDR: redis:6379
+      POSTGRES_URL: postgres://postgres:postgres@postgres:5432/telemetry?sslmode=disable
+      MINIO_ENDPOINT: minio:9000
