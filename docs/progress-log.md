@@ -242,3 +242,24 @@ one real alert, a **k6 load test** for the numbers, and a minimal **Kubernetes**
 
 **Next up:** **consumer groups + acknowledgment** (crash-safe processing) → the **chaos test**
 (kill the worker mid-processing, prove zero data loss), then Prometheus/Grafana + K8s.
+
+---
+
+## 2026-08-04 — Consumer groups + acknowledgment, proven with a chaos test (zero data loss)
+- Rewrote the worker's read loop from a plain `XRead` (which tracked its position in an
+  in-memory `lastID` — lost on crash) to a **Redis consumer group**: `XReadGroup` to
+  read-and-claim, then `XAck` **only after** a successful save to Postgres + MinIO. Redis now
+  keeps the score, not the worker's memory. (See [concepts.md](concepts.md).)
+- Added idempotent group setup (`XGroupCreateMkStream`, ignoring `BUSYGROUP` on restart) and a
+  **two-phase read**: start at ID `"0"` to replay this consumer's delivered-but-unacked
+  (pending) events — the crash-recovery path — then switch to `">"` for brand-new events.
+- **Ran the chaos test:** stopped the worker, piled up a backlog, then reproduced the exact
+  crash state by delivering **40 events to `worker-1` without acking** (`XPENDING` = 40 = "held
+  but never confirmed"). Restarted the worker → it replayed those 40 from the pending list,
+  saved + acked them, drained the rest → **`XPENDING` = 0, nothing lost.**
+- This is **at-least-once** delivery. Honest tradeoff: a crash *after* save but *before* ack
+  reprocesses an event (a duplicate); the next-level fix is idempotency (dedup on event ID),
+  noted as future work.
+
+**Next up:** **Prometheus + Grafana** observability (pool utilization + p99 dashboards, one real
+alert — the Microsoft JD's exact ask), then a minimal **Kubernetes** deployment.

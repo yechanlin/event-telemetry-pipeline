@@ -85,31 +85,61 @@ func main() {
 	// --- Redis (the queue we consume) ---
 	rdb := redis.NewClient(&redis.Options{Addr: getenv("REDIS_ADDR", "localhost:6379")})
 
-	fmt.Println("worker started: Redis → Postgres + object storage...")
+	// Create the consumer group "workers" on the "events" stream (idempotent).
+	// MkStream also creates the stream if it doesn't exist yet. "0" means the
+	// group starts consuming from the very beginning of the stream.
+	const group = "workers"
+	consumer := getenv("CONSUMER_NAME", "worker-1")
+	if err := rdb.XGroupCreateMkStream(ctx, "events", group, "0").Err(); err != nil {
+		// "BUSYGROUP" just means the group already exists — expected on restart.
+		if !strings.Contains(err.Error(), "BUSYGROUP") {
+			fmt.Println("could not create consumer group:", err)
+			return
+		}
+	}
+
+	fmt.Printf("worker %q started in group %q: Redis → Postgres + object storage...\n", consumer, group)
 
 	saved := 0
-	lastID := "0" // "0" = start from the beginning of the stream
+	// Start by replaying our OWN delivered-but-unacked events (crash recovery),
+	// then switch to ">" for brand-new events. Redis keeps the score now, not us.
+	readID := "0"
 	for {
-		streams, err := rdb.XRead(ctx, &redis.XReadArgs{
-			Streams: []string{"events", lastID},
-			Count:   10,
-			Block:   0, // block until new events arrive
+		streams, err := rdb.XReadGroup(ctx, &redis.XReadGroupArgs{
+			Group:    group,
+			Consumer: consumer,
+			Streams:  []string{"events", readID},
+			Count:    10,
+			Block:    0, // block waiting for new events (only matters once readID == ">")
 		}).Result()
-		if err != nil {
+		if err != nil && err != redis.Nil {
 			fmt.Println("error reading from redis:", err)
 			return
 		}
 
-		for _, stream := range streams {
-			for _, msg := range stream.Messages {
-				if err := save(ctx, db, mc, msg); err != nil {
-					fmt.Println("could not save event:", err)
-					continue
-				}
-				saved++
-				lastID = msg.ID
-				fmt.Printf("saved event %s (total: %d)\n", msg.ID, saved)
+		// Messages returned by this read (may be empty).
+		var msgs []redis.XMessage
+		if len(streams) > 0 {
+			msgs = streams[0].Messages
+		}
+
+		// Finished replaying our old pending events? Switch to brand-new ones.
+		if readID != ">" && len(msgs) == 0 {
+			readID = ">"
+			continue
+		}
+
+		for _, msg := range msgs {
+			if err := save(ctx, db, mc, msg); err != nil {
+				fmt.Println("could not save event:", err)
+				continue // do NOT ack — it stays pending and gets retried later
 			}
+			// Saved to Postgres + MinIO → tell Redis "done" so it won't be redelivered.
+			if err := rdb.XAck(ctx, "events", group, msg.ID).Err(); err != nil {
+				fmt.Println("could not ack event:", err)
+			}
+			saved++
+			fmt.Printf("saved + acked %s (total: %d)\n", msg.ID, saved)
 		}
 	}
 }

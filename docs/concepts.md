@@ -410,3 +410,43 @@ unlocks gets you silence.
 **liveness** signal and a **readiness** signal — the exact idea Kubernetes formalizes with
 liveness and readiness probes. I hit the startup race, then fixed it with a Postgres
 healthcheck gating the worker's `depends_on`."
+
+## Consumer groups + acknowledgment (not losing work when a worker crashes)
+
+**The problem:** the worker reads an event and saves it — but if it **crashes mid-save**, that
+event can vanish, and nothing remembers it was in progress. The old code tracked its position
+in an in-memory variable (`lastID`), which is *gone* the instant the worker dies.
+
+**The fix in one sentence:** make the worker say **"done"** to Redis *after* it saves — so if
+it crashes before saying "done," Redis still holds the event and hands it back on restart.
+
+**To-do-list analogy:** you only cross off a task *after* you finish it. Pass out mid-task and
+the item is **still not crossed off** — so when you wake up, you know to redo it. Nothing is
+forgotten.
+
+**The three Redis commands:**
+- **`XGROUP CREATE`** — set up the scoreboard (a *consumer group*) on the stream, once.
+- **`XREADGROUP`** — read *and claim*: Redis records the events as "given out, not yet done"
+  (they go on the **pending list**).
+- **`XACK`** — mark an event done, so Redis removes it from the pending list.
+
+**The loop:** `XReadGroup → save to Postgres + MinIO → XAck`. If the worker crashes between
+"claim" and "ack," the event stays on the pending list. On restart the worker reads with ID
+`"0"` first (its own pending, delivered-but-unacked = the crash leftovers), reprocesses them,
+then switches to `">"` (brand-new events).
+
+**Proven with a chaos test:** we delivered 40 events to `worker-1` without acking (`XPENDING`
+= 40 — exactly what a mid-save crash leaves behind), restarted the worker, and it replayed
+those 40 from the pending list → `XPENDING` = 0, zero loss.
+
+**This is "at-least-once" delivery** — the most common guarantee in production (payments,
+orders, telemetry). Servers crash *routinely* (deploys, OOM, rescheduling), so real systems are
+built to replay unfinished work. **Honest tradeoff:** a crash *after* save but *before* ack
+reprocesses the event (a **duplicate**). Fixing that is **idempotency** (dedup on event ID) —
+the approximation everyone uses for "exactly-once." Knowing *which* guarantee a use case needs
+(at-most-once for metrics, at-least-once for money/data) is itself a core backend design skill.
+
+**Interview line:** "I used a Redis consumer group with acknowledgment — the worker only acks
+after saving to Postgres and object storage. I reproduced a mid-processing crash, saw the
+in-flight events stuck as unacknowledged, restarted, and it replayed exactly those from the
+pending list. Zero data loss — at-least-once, with idempotency as the next step for dedup."

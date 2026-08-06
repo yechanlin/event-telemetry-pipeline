@@ -74,10 +74,10 @@ an interview.
 ✅ Worker: Redis → PostgreSQL                             (done — full pipeline works!)
 ✅ Worker: also write raw payloads to object storage      (done — MinIO/S3, data-lake pattern)
 ✅ Docker Compose (one-command run)                       (Week 2 — done! whole stack, one command)
-⬜ Consumer groups + acknowledgment (crash recovery)       (Week 3, with the chaos test)
+✅ Consumer groups + acknowledgment (crash recovery)       (done — XReadGroup + XAck)
 ✅ Load test → the NUMBERS (~55K ev/s, p99 <2ms, ~7× vs per-dial)  (done — Go load-gen)
 ⬜ Grafana dashboards + alert
-⬜ Chaos test → resilience story
+✅ Chaos test → resilience story                           (done — killed worker, zero data loss)
 ⬜ K8s + README + demo video + final resume bullets
 ```
 
