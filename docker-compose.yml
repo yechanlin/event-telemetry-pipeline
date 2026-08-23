@@ -36,6 +36,7 @@ services:
       REDIS_ADDR: redis:6379
     ports:
       - "9000:9000"          # so the simulator on your Mac can reach it
+      - "2112:2112"          # Prometheus /metrics endpoint
 
   worker:
     build: ./worker
