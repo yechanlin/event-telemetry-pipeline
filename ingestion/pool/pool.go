@@ -17,6 +17,14 @@ var InUse = prometheus.NewGauge(prometheus.GaugeOpts{
 	Help: "Number of pooled Redis connections currently checked out.",
 })
 
+// AcquiresTotal counts every successful Acquire, ever. It's a counter — it
+// only ever goes up — so unlike InUse, a single scrape can never "miss" one:
+// the total is still there no matter when Prometheus happens to look.
+var AcquiresTotal = prometheus.NewCounter(prometheus.CounterOpts{
+	Name: "pool_acquires_total",
+	Help: "Total number of connections successfully acquired from the pool.",
+})
+
 // Pool is a bounded set of reusable phone lines (connections) to one downstream address.
 type Pool struct {
 	conns chan net.Conn // the bowl: open connections waiting to be used
@@ -46,7 +54,8 @@ func New(addr string, size int) (*Pool, error) {
 func (p *Pool) Acquire(timeout time.Duration) (net.Conn, error) {
 	select {
 	case conn := <-p.conns:
-		InUse.Inc() // one more connection just left the rack
+		InUse.Inc()         // one more connection just left the rack
+		AcquiresTotal.Inc() // record it happened, permanently
 		return conn, nil // a phone was available — take it
 	case <-time.After(timeout):
 		return nil, fmt.Errorf("timed out waiting for a connection")
