@@ -5,9 +5,13 @@ import (
 	"encoding/json" // Go's JSON reader/writer
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"ingestion/pool" // our hand-built connection pool
 )
@@ -35,6 +39,18 @@ type TelemetryEvent struct {
 }
 
 func main() {
+	// Register the pool's metrics, then serve them on a separate HTTP port.
+	// Separate from :9000 on purpose — :9000 speaks our raw line-delimited-JSON
+	// protocol to simulators, not HTTP; Prometheus needs a normal HTTP endpoint.
+	prometheus.MustRegister(pool.InUse)
+	go func() {
+		http.Handle("/metrics", promhttp.Handler())
+		fmt.Println("metrics available at :2112/metrics")
+		if err := http.ListenAndServe(":2112", nil); err != nil {
+			fmt.Println("metrics server error:", err)
+		}
+	}()
+
 	listener, err := net.Listen("tcp", ":9000")
 	if err != nil {
 		fmt.Println("could not start listening:", err)

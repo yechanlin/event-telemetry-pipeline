@@ -5,7 +5,17 @@ import (
 	"fmt"
 	"net"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
+
+// InUse reports how many pooled connections are currently checked out.
+// It's a gauge — a number that goes up and down — updated every time a
+// connection is borrowed (Acquire) or returned (Release/Discard).
+var InUse = prometheus.NewGauge(prometheus.GaugeOpts{
+	Name: "pool_connections_in_use",
+	Help: "Number of pooled Redis connections currently checked out.",
+})
 
 // Pool is a bounded set of reusable phone lines (connections) to one downstream address.
 type Pool struct {
@@ -36,6 +46,7 @@ func New(addr string, size int) (*Pool, error) {
 func (p *Pool) Acquire(timeout time.Duration) (net.Conn, error) {
 	select {
 	case conn := <-p.conns:
+		InUse.Inc() // one more connection just left the rack
 		return conn, nil // a phone was available — take it
 	case <-time.After(timeout):
 		return nil, fmt.Errorf("timed out waiting for a connection")
@@ -45,12 +56,14 @@ func (p *Pool) Acquire(timeout time.Duration) (net.Conn, error) {
 // Release puts a phone line back on the rack for reuse.
 func (p *Pool) Release(conn net.Conn) {
 	p.conns <- conn // drop it back in the bowl
+	InUse.Dec()      // one fewer connection checked out
 }
 
 // Discard throws away a broken connection and dials a fresh replacement,
 // so the pool stays at full size.
 func (p *Pool) Discard(conn net.Conn) error {
 	conn.Close() // hang up the dead line
+	InUse.Dec()  // it was checked out; it no longer is (broken or not)
 
 	newConn, err := net.Dial("tcp", p.addr) // dial a fresh replacement
 	if err != nil {
