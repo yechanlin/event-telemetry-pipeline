@@ -42,6 +42,7 @@ services:
     image: prom/prometheus:latest
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus  # durable storage for the time-series database
     ports:
       - "9090:9090"          # Prometheus's own web UI
     depends_on:
@@ -60,3 +61,6 @@ services:
       REDIS_ADDR: redis:6379
       POSTGRES_URL: postgres://postgres:postgres@postgres:5432/telemetry?sslmode=disable
       MINIO_ENDPOINT: minio:9000
+
+volumes:
+  prometheus_data:  # a Docker-managed volume, declared here so services above can reference it
