@@ -42,7 +42,7 @@ func main() {
 	// Register the pool's metrics, then serve them on a separate HTTP port.
 	// Separate from :9000 on purpose — :9000 speaks our raw line-delimited-JSON
 	// protocol to simulators, not HTTP; Prometheus needs a normal HTTP endpoint.
-	prometheus.MustRegister(pool.InUse, pool.AcquiresTotal)
+	prometheus.MustRegister(pool.InUse, pool.AcquiresTotal, pool.AcquireTimeoutsTotal)
 	go func() {
 		http.Handle("/metrics", promhttp.Handler())
 		fmt.Println("metrics available at :2112/metrics")

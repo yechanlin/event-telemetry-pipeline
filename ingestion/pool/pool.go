@@ -25,6 +25,14 @@ var AcquiresTotal = prometheus.NewCounter(prometheus.CounterOpts{
 	Help: "Total number of connections successfully acquired from the pool.",
 })
 
+// AcquireTimeoutsTotal counts every time Acquire gave up waiting because the
+// pool was fully checked out. A climbing count means the pool is saturated
+// and shedding load -- the signal an alert should watch.
+var AcquireTimeoutsTotal = prometheus.NewCounter(prometheus.CounterOpts{
+	Name: "pool_acquire_timeouts_total",
+	Help: "Total number of Acquire calls that timed out waiting for a connection.",
+})
+
 // Pool is a bounded set of reusable phone lines (connections) to one downstream address.
 type Pool struct {
 	conns chan net.Conn // the bowl: open connections waiting to be used
@@ -58,6 +66,7 @@ func (p *Pool) Acquire(timeout time.Duration) (net.Conn, error) {
 		AcquiresTotal.Inc() // record it happened, permanently
 		return conn, nil // a phone was available — take it
 	case <-time.After(timeout):
+		AcquireTimeoutsTotal.Inc() // record the pool was saturated, permanently
 		return nil, fmt.Errorf("timed out waiting for a connection")
 	}
 }
