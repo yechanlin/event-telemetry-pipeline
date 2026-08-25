@@ -305,5 +305,24 @@ alert — the Microsoft JD's exact ask), then a minimal **Kubernetes** deploymen
   requests (73%) timed out**, and the few that succeeded had latencies clustered right at the
   timeout ceiling — exactly what timeout-based load shedding under real contention looks like.
 
-**Next up:** a **Grafana** dashboard on top of this Prometheus data, then **one real alert**
-(the Microsoft JD's exact ask), then a minimal **Kubernetes** deployment.
+- Added **Grafana** (`grafana/grafana` image) in `docker-compose.yml`, port `3000`, pre-wired
+  to Prometheus via a **provisioning config**
+  (`grafana/provisioning/datasources/prometheus.yml`) — confirmed on first login the
+  Prometheus data source was already there, marked "Provisioned data source... added by
+  config," no manual click-through setup needed. Added a `grafana_data` named volume too
+  (same durability pattern as Prometheus's), so dashboards/settings survive
+  `docker compose down`.
+- Built and saved a real 3-panel dashboard (`PoolAcquirsTotal`) — `pool_connections_in_use`,
+  `pool_acquires_total`, `pool_acquire_timeouts_total` — all querying live Prometheus data.
+  The `pool_acquires_total` panel told an honest, un-staged story on its own: a flat line
+  around 630 (idle), a hard drop to 0 (the `ingestion` container getting rebuilt for the
+  timeout-counter change — in-memory counter reset, exactly as expected), then climbing again
+  from a fresh simulator run (confirmed live via the tooltip reading `108` at the timestamp
+  right after the restart). The other two panels are honestly flat, for reasons already
+  understood: `pool_connections_in_use` almost never samples the ~1-2ms active window, and
+  `pool_acquire_timeouts_total` has never been triggered against the *live* service (only the
+  separate load-test process saturated a pool, and that number lives in a different process's
+  memory — never touches this dashboard).
+
+**Next up:** **one real alert** on `pool_acquire_timeouts_total` (the Microsoft JD's exact
+ask — "pool saturated for N seconds"), then a minimal **Kubernetes** deployment.
