@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,6 +24,22 @@ func getenv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// getenvInt is getenv, but parsed as an integer -- for tunables like pool size
+// and timeout that we want configurable without a code change (e.g. to
+// deliberately shrink them for a saturation test, without touching the
+// real defaults).
+func getenvInt(key string, fallback int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return fallback
+	}
+	return n
 }
 
 // TelemetryEvent is the shape of the JSON the Python simulator sends.
@@ -59,8 +76,14 @@ func main() {
 	defer listener.Close()
 	fmt.Println("ingestion service listening on port 9000")
 
+	// Pool size and acquire timeout are configurable, defaulting to the real
+	// production-shaped values -- overridable (e.g. to deliberately shrink
+	// them for a saturation test) without touching these defaults.
+	poolSize := getenvInt("POOL_SIZE", 5)
+	acquireTimeout := time.Duration(getenvInt("ACQUIRE_TIMEOUT_MS", 2000)) * time.Millisecond
+
 	// Create a pool of reusable connections to Redis.
-	p, err := pool.New(getenv("REDIS_ADDR", "localhost:6379"), 5)
+	p, err := pool.New(getenv("REDIS_ADDR", "localhost:6379"), poolSize)
 	if err != nil {
 		fmt.Println("could not build connection pool:", err)
 		return
@@ -74,11 +97,11 @@ func main() {
 			continue
 		}
 		fmt.Println("simulator connected")
-		go handle(conn, p)
+		go handle(conn, p, acquireTimeout)
 	}
 }
 
-func handle(conn net.Conn, p *pool.Pool) {
+func handle(conn net.Conn, p *pool.Pool, acquireTimeout time.Duration) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
 
@@ -100,7 +123,7 @@ func handle(conn net.Conn, p *pool.Pool) {
 		count++
 
 		// Forward the event downstream through the pool.
-		if err := forward(p, line); err != nil {
+		if err := forward(p, line, acquireTimeout); err != nil {
 			fmt.Println("could not forward event:", err)
 			continue
 		}
@@ -108,8 +131,8 @@ func handle(conn net.Conn, p *pool.Pool) {
 }
 
 // forward sends one event to Redis (XADD), borrowing a connection from the pool.
-func forward(p *pool.Pool, line string) error {
-	conn, err := p.Acquire(2 * time.Second) // borrow a connection from the pool
+func forward(p *pool.Pool, line string, acquireTimeout time.Duration) error {
+	conn, err := p.Acquire(acquireTimeout) // borrow a connection from the pool
 	if err != nil {
 		return err // pool was saturated and we timed out
 	}
