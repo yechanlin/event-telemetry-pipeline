@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"ingestion/pool" // benchmark the REAL pool
@@ -44,6 +45,7 @@ func main() {
 
 	perWorker := *total / *conc
 	latency := make([][]time.Duration, *conc) // one slice per worker → no locking
+	var acquireFailures int64                 // shared across goroutines → needs atomic, not a plain int
 
 	var wg sync.WaitGroup
 	start := time.Now()
@@ -57,6 +59,7 @@ func main() {
 				if *mode == "pooled" {
 					conn, err := p.Acquire(*acquireTimeout)
 					if err != nil {
+						atomic.AddInt64(&acquireFailures, 1)
 						continue
 					}
 					if doOne(conn, cmd) != nil {
@@ -90,6 +93,9 @@ func main() {
 	fmt.Printf("mode=%s  events=%d  concurrency=%d\n", *mode, n, *conc)
 	fmt.Printf("elapsed=%.2fs  throughput=%.0f events/sec\n", elapsed.Seconds(), float64(n)/elapsed.Seconds())
 	fmt.Printf("p50=%v  p95=%v  p99=%v\n", pct(all, 50), pct(all, 95), pct(all, 99))
+	if *mode == "pooled" {
+		fmt.Printf("acquire_timeouts=%d\n", acquireFailures)
+	}
 }
 
 // doOne sends one XADD and consumes its reply (request→response).
