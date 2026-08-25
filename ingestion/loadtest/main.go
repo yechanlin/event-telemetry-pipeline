@@ -20,6 +20,8 @@ func main() {
 	addr := flag.String("addr", "localhost:6379", "Redis address")
 	total := flag.Int("n", 20000, "total events to send")
 	conc := flag.Int("c", 50, "concurrent senders")
+	poolSize := flag.Int("poolsize", 0, "pool size (pooled mode only; 0 = same as -c, no contention)")
+	acquireTimeout := flag.Duration("timeout", 5*time.Second, "Acquire timeout (pooled mode only)")
 	flag.Parse()
 
 	payload := `{"frame":0,"lat":49.0,"lon":8.4,"speed_mps":13.17,"num_satellites":11}`
@@ -29,8 +31,12 @@ func main() {
 	// run the same number of Redis ops in flight — only reuse vs. re-dial differs.
 	var p *pool.Pool
 	if *mode == "pooled" {
+		size := *conc
+		if *poolSize > 0 {
+			size = *poolSize // deliberately smaller than -c, to force real contention
+		}
 		var err error
-		if p, err = pool.New(*addr, *conc); err != nil {
+		if p, err = pool.New(*addr, size); err != nil {
 			fmt.Println("could not build pool:", err)
 			return
 		}
@@ -49,7 +55,7 @@ func main() {
 			for i := 0; i < perWorker; i++ {
 				t0 := time.Now()
 				if *mode == "pooled" {
-					conn, err := p.Acquire(5 * time.Second)
+					conn, err := p.Acquire(*acquireTimeout)
 					if err != nil {
 						continue
 					}
