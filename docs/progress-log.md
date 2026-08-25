@@ -340,5 +340,24 @@ alert — the Microsoft JD's exact ask), then a minimal **Kubernetes** deploymen
   notification channel; the rule and evaluation are real, wiring an actual delivery channel is
   separate future work.
 
-**Next up:** actually trigger this alert for real against the *live* `ingestion` service (not
-the isolated load-test process), then a minimal **Kubernetes** deployment.
+- **Triggered the alert for real against the live `ingestion` service** (not the isolated
+  load-test process, which can't touch its metrics). The real pool (5 connections, 2s
+  timeout) is too fast to genuinely saturate without an impractical number of concurrent
+  senders — each acquire/use/release cycle is only ~1-2ms — so made `POOL_SIZE` and
+  `ACQUIRE_TIMEOUT_MS` configurable via env vars (defaulting to the real `5`/`2000ms`) and
+  temporarily overrode them to `1`/`50ms` for this test only. Wrote `scratch/hammer.py` — 50
+  concurrent, unpaced connections into the live `:9000` — since the real simulator's one slow,
+  paced connection can't create this kind of burst. First run at `1`/`50ms`: **zero timeouts**,
+  `pool_acquires_total` hit exactly `5000` (50×100) — genuinely informative, not a failure: it
+  proved the worst-case queued wait landed just under 50ms. Tightened to `10ms` → **14 real
+  timeouts**, confirmed live on `pool_acquire_timeouts_total`. Within a minute, the Grafana
+  alert rule's evaluated instance flipped to **Firing** (`1`, pink badge) with a visible spike
+  in its graph at the exact moment `hammer.py` ran. Reverted the env var overrides immediately
+  after — `ingestion` is back to real production values (pool size 5, 2s timeout); kept
+  `hammer.py` as reusable test tooling for future saturation testing.
+
+This closes out the full Prometheus/Grafana/alerting task end-to-end, proven rather than just
+configured: real metrics → real scraping → real durable storage → real dashboard → a real
+alert rule that has now actually fired against genuine saturation of the live service.
+
+**Next up:** a minimal **Kubernetes** deployment.
