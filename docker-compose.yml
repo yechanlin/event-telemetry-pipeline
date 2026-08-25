@@ -48,6 +48,16 @@ services:
     depends_on:
       - ingestion
 
+  grafana:
+    image: grafana/grafana:latest
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - grafana_data:/var/lib/grafana  # durable storage for dashboards/settings
+    ports:
+      - "3000:3000"          # Grafana's own web UI
+    depends_on:
+      - prometheus
+
   worker:
     build: ./worker
     depends_on:
@@ -64,3 +74,4 @@ services:
 
 volumes:
   prometheus_data:  # a Docker-managed volume, declared here so services above can reference it
+  grafana_data:
