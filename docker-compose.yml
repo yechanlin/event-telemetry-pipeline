@@ -34,6 +34,10 @@ services:
       - redis
     environment:
       REDIS_ADDR: redis:6379
+      # TEMPORARY, for the saturation test only -- real defaults are 5 / 2000ms.
+      # Revert (remove these two lines) once the alert has been proven to fire.
+      POOL_SIZE: 1
+      ACQUIRE_TIMEOUT_MS: 50
     ports:
       - "9000:9000"          # so the simulator on your Mac can reach it
       - "2112:2112"          # Prometheus /metrics endpoint
