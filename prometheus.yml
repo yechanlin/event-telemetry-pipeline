@@ -1,0 +1,7 @@
+global:
+  scrape_interval: 5s # how often Prometheus scrapes every target, by default
+
+scrape_configs:
+  - job_name: "ingestion" # a label for this group of targets, shown in Prometheus's UI
+    static_configs:
+      - targets: ["ingestion:2112"] # Docker service name + the port our /metrics lives on

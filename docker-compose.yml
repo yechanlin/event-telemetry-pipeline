@@ -38,6 +38,15 @@ services:
       - "9000:9000"          # so the simulator on your Mac can reach it
       - "2112:2112"          # Prometheus /metrics endpoint
 
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"          # Prometheus's own web UI
+    depends_on:
+      - ingestion
+
   worker:
     build: ./worker
     depends_on:
