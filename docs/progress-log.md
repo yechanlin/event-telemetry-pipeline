@@ -324,5 +324,21 @@ alert — the Microsoft JD's exact ask), then a minimal **Kubernetes** deploymen
   separate load-test process saturated a pool, and that number lives in a different process's
   memory — never touches this dashboard).
 
-**Next up:** **one real alert** on `pool_acquire_timeouts_total` (the Microsoft JD's exact
-ask — "pool saturated for N seconds"), then a minimal **Kubernetes** deployment.
+- Built **one real Grafana alert rule** — "Pool acquire timeouts (saturation)" — the Microsoft
+  JD's exact ask. Query: `increase(pool_acquire_timeouts_total[1m]) > 0`. Deliberately used
+  `increase()` over a window, not the raw counter value: a plain counter never resets, so
+  `pool_acquire_timeouts_total > 0` would have latched permanently "firing" after the very
+  first-ever timeout and stayed that way forever — the textbook **alert fatigue** anti-pattern
+  (an always-red alert trains you to ignore it, so the one time it's a real new problem, nobody
+  notices). `increase()` over a recent window only asks "did this happen *recently*," so it
+  naturally clears once the real problem stops. Set pending period to `None` (fire on first
+  true evaluation — a real timeout is worth knowing about immediately, no need to debounce),
+  evaluation group `pool-checks` every `1m`. **Previewed live against real data → correctly
+  evaluated `0`, status `Normal`** — proof the rule is wired to the real pipeline and correctly
+  quiet, since nothing has actually saturated the *live* service yet. Contact point left on
+  Grafana's default (no SMTP/Slack configured) — an honest, stated gap rather than a faked
+  notification channel; the rule and evaluation are real, wiring an actual delivery channel is
+  separate future work.
+
+**Next up:** actually trigger this alert for real against the *live* `ingestion` service (not
+the isolated load-test process), then a minimal **Kubernetes** deployment.
