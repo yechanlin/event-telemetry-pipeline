@@ -263,3 +263,47 @@ one real alert, a **k6 load test** for the numbers, and a minimal **Kubernetes**
 
 **Next up:** **Prometheus + Grafana** observability (pool utilization + p99 dashboards, one real
 alert — the Microsoft JD's exact ask), then a minimal **Kubernetes** deployment.
+
+---
+
+## 2026-08-25 — Instrumented the pool with Prometheus, stood up a real scraper, proved saturation
+- Added the **Prometheus Go client** (`prometheus/client_golang`) to `ingestion` — the first
+  external dependency in that service, deliberately: the hand-built rule is about the *pool*
+  being from-scratch, not reimplementing Prometheus's own text-exposition format.
+- Instrumented `pool.go` with three metrics, updated directly inside `Acquire`/`Release`/`Discard`:
+  - `pool_connections_in_use` (**gauge**) — connections currently checked out.
+  - `pool_acquires_total` (**counter**) — every successful acquire, ever.
+  - `pool_acquire_timeouts_total` (**counter**) — every time `Acquire` gave up waiting because
+    the pool was fully checked out; the signal a saturation alert should watch.
+  - Served on a **separate `:2112/metrics` HTTP endpoint** (`:9000` stays the raw line-JSON
+    protocol for simulators — Prometheus needs plain HTTP).
+- **Live-proved the gauge-vs-counter distinction**, not just in theory: polling
+  `pool_connections_in_use` every 50ms during a real 10 events/sec simulator run still only
+  ever read `0` — each acquire/release cycle is ~1–2ms out of every 100ms, so a point-in-time
+  gauge kept missing it. `pool_acquires_total`, a counter, never missed anything — a single
+  `curl` after the run showed the true total every time.
+- Stood up an actual **Prometheus server** (`prom/prometheus` image, no custom build) in
+  `docker-compose.yml`, config in `prometheus.yml` (`scrape_interval: 5s`, target
+  `ingestion:2112` — the Docker *service name*, since Prometheus scrapes from inside the
+  Docker network, not from the host). Confirmed `ingestion` shows `1/1 up` on Prometheus's
+  own Targets page, and watched `pool_acquires_total` climb as a real graph in its Graph tab.
+- **Added a named volume** (`prometheus_data:/prometheus`) for Prometheus's own time-series
+  storage — without it, history would live only in the container's writable layer and vanish
+  on `docker compose down`. Proved it live: ran the simulator, saw the graph climb, ran
+  `docker compose down` + `up` (full container removal + recreation), and the earlier history
+  was still there. Also flagged as an honest gap: `postgres`/`minio` don't have this yet either
+  — their durability across `down` has been accidental (container never removed), not
+  intentional.
+- **Deliberately triggered real pool saturation** to prove `pool_acquire_timeouts_total`'s
+  behavior isn't theoretical. The existing load-test tool (`ingestion/loadtest/`) always sized
+  its pool to match concurrency (`pool.New(addr, *conc)`), so demand could never exceed supply
+  and `Acquire` could never time out. Added `-poolsize` and `-timeout` flags to decouple pool
+  size from concurrency on purpose, plus a `sync/atomic`-counted `acquire_timeouts` in the
+  summary output (this runs as its own separate process, so it can't appear in the live
+  service's Prometheus metrics — a real process-boundary lesson, not just a technicality).
+  Result with 2 connections vs. 100 concurrent senders and a 2ms timeout: **3,638 of 5,000
+  requests (73%) timed out**, and the few that succeeded had latencies clustered right at the
+  timeout ceiling — exactly what timeout-based load shedding under real contention looks like.
+
+**Next up:** a **Grafana** dashboard on top of this Prometheus data, then **one real alert**
+(the Microsoft JD's exact ask), then a minimal **Kubernetes** deployment.
