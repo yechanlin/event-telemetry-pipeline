@@ -450,3 +450,151 @@ the approximation everyone uses for "exactly-once." Knowing *which* guarantee a 
 after saving to Postgres and object storage. I reproduced a mid-processing crash, saw the
 in-flight events stuck as unacknowledged, restarted, and it replayed exactly those from the
 pending list. Zero data loss — at-least-once, with idempotency as the next step for dedup."
+
+## Kubernetes = an automated manager, not just "another way to run containers"
+
+Docker Compose runs everything on **one machine**. If a container crashes, *you* have to
+notice and restart it. **Kubernetes** is built to run containers across **many machines**
+(*nodes*) and constantly enforce "is reality still matching what I was told to keep true" —
+restarting a crashed container, spreading copies across machines, routing traffic to whatever's
+currently healthy, all **automatically**, without anyone watching.
+
+**Restaurant-chain analogy:** Compose is you personally running one kitchen — you relight a
+dead burner yourself. Kubernetes is the chain's operations system: it doesn't cook, but it
+walks every kitchen checking "is every station running the way I was told," and fixes drift on
+its own.
+
+**Why practice it for a project that doesn't need it:** for 7 containers on one laptop,
+Kubernetes is genuine overkill — Compose is completely sufficient. The reason to build it
+anyway: real infra teams (Tesla, Meta, NVIDIA, anyone running backend at scale) run Kubernetes
+across real machines in production, and the concepts — Pod, Deployment, Service, self-healing —
+work **identically** whether the cluster has 1 fake local node or 1,000 real ones. Nobody
+learns Kubernetes by starting on a live 50-machine production cluster; everyone practices
+locally first. It's a skill this project demonstrates, not a problem this project has.
+
+## The core vocabulary: Node → Pod → Deployment → Service
+
+Four words that build on each other, each solving the gap the previous one leaves:
+
+- **Node** — one machine (real, or in local practice, a Docker container pretending to be
+  one) that has CPU/memory and can run things.
+- **Pod** — the smallest thing Kubernetes schedules: usually one container, wrapped with a
+  little bookkeeping (an internal IP, some labels). One kitchen (Node) can host many trucks
+  (Pods) at once — they're different levels, not the same thing.
+- **Deployment** — a *standing rule*, not a one-time action: "always keep N copies of this
+  Pod running." If one dies, the Deployment notices and creates a replacement, on its own,
+  forever. This is the actual self-healing mechanism.
+- **Service** — the problem: every time a Pod gets recreated, it gets a **brand-new internal
+  IP**. A Service gives a group of Pods **one fixed address that never changes**, and quietly
+  routes to whichever real Pod currently exists behind it.
+
+**Company phone number analogy for Service vs. Pod:** the Service is the company's published
+phone number — customers always dial the same number, forever. The Pod is the individual
+employee's desk extension the call actually gets routed to internally — that extension changes
+whenever staff rotates, but callers never see it.
+
+**Proven live, not just described:** deleted the running `redis` Pod directly. The Deployment
+noticed the replica count dropped and created a replacement automatically — new name, new IP,
+even landed on a *different* node. The Service's IP never moved through any of it.
+
+## Pod IP vs. Service IP — two separate, deliberately distinct address ranges
+
+Kubernetes keeps **two separate virtual IP ranges**, on purpose:
+
+- **Pod range** (e.g. `10.244.x.x`) — the *real* Pod's address, assigned fresh every time
+  it's created.
+- **Service range** (e.g. `10.96.x.x`) — a completely separate range where nothing actually
+  "lives." Kubernetes' internal networking watches which real Pod IP currently backs a Service
+  and silently rewrites traffic to it — invisible to the caller.
+
+If the Pod dies and a new one appears with a different IP, the Service IP **doesn't change** —
+only the invisible redirect target behind it updates. Keeping the two ranges visually distinct
+makes it obvious, just from an IP, whether you're looking at something real-but-changeable or
+stable-but-virtual.
+
+## Secrets and ConfigMaps — getting credentials and config files into the cluster
+
+**The problem both solve:** a Docker Compose bind mount (`./prometheus.yml:/etc/prometheus/...`)
+assumes "your machine" is one specific place. In Kubernetes, a Pod could land on any node, so
+there's no single machine's disk to mount from — the file's *content* has to live inside the
+cluster itself instead.
+
+- **ConfigMap** — for ordinary config files (e.g. `prometheus.yml`, Grafana's datasource
+  provisioning). Stored in the cluster, mounted into a Pod at whatever path the app expects —
+  same end result as the bind mount, different source.
+- **Secret** — same idea, but for sensitive values (passwords). Created directly via
+  `kubectl create secret ...` rather than written into a committed YAML file, so the real value
+  never ends up in git. Referenced from a Deployment via `valueFrom.secretKeyRef` instead of a
+  literal `value:`.
+
+**Honest caveat worth knowing:** a Secret's value is **base64-encoded, not encrypted** —
+trivially reversible (`echo <value> | base64 -d`). A Secret is really about keeping credentials
+out of git-tracked files, not about making them unreadable. Real production setups add real
+encryption on top (a vault system, encryption-at-rest).
+
+**Composing a Secret into a larger string:** one env var's value can reference another env var
+already defined earlier in the same list, via `$(VAR_NAME)` — e.g. building `POSTGRES_URL`
+(`postgres://postgres:$(POSTGRES_PASSWORD)@postgres:5432/...`) from a password sourced from a
+Secret, so the composite connection string still never contains the real password in the file.
+
+## Getting a locally-built (not-from-a-registry) image into the cluster
+
+`redis:7-alpine` "just works" on any node because it lives on Docker Hub — a shared location
+any machine can pull from. A custom-built image like `event-telemetry-pipeline-ingestion:latest`
+only exists in one place at first: the machine that built it.
+
+**Three different answers to "how does Kubernetes get it," each real:**
+1. **Shared local storage (what happened here, by luck of setup)** — Docker Desktop's "use
+   containerd for pulling and storing images" setting makes Docker and `kind`'s nodes read from
+   the *same* image storage. Build the image once with `docker build`, and it's already
+   "present" as far as Kubernetes is concerned — `imagePullPolicy: IfNotPresent` finds it
+   without ever attempting a pull. Only works because everything is one machine (this laptop).
+2. **`kind load docker-image`** — for local testing when the storage *isn't* shared (or the
+   image was rebuilt and the cluster's copy is stale): explicitly copies the image from
+   Docker's storage directly into each `kind` node container.
+3. **A real registry (the actual production answer)** — `docker build` → `docker tag` with a
+   registry address (Docker Hub, GHCR, ECR) → `docker push`. Now *any* node, anywhere, including
+   real physically-separate machines with no shared disk, can pull it over the network, exactly
+   like Redis's maintainers uploaded `redis:7-alpine` once. Private registries add
+   `imagePullSecrets` (yet another Secret) for authentication.
+
+**The honest framing:** local development got a shortcut specific to running everything on one
+machine. A real multi-machine cluster has no such shortcut — it needs the registry step,
+always.
+
+## `kubectl port-forward` — a temporary, one-person tunnel, not a permanent door
+
+A Docker Compose `ports: "9000:9000"` mapping is **permanent** for as long as the container
+runs — no separate command needed to "turn on" access. Kubernetes Services don't work that
+way: a ClusterIP Service (the default) is only reachable **from inside the cluster** — nothing
+outside (like a script running on your own laptop, not as a Pod) can reach it directly.
+
+**`kubectl port-forward svc/ingestion 9000:9000`** bridges that gap, temporarily: opens port
+9000 on your machine, tunnels anything that arrives there into port 9000 of the `ingestion`
+Service. Same `local:remote` mental model as Compose's `ports:` syntax — just tunneling into a
+cluster instead of mapping into one container. **The key difference: it only exists while that
+exact command keeps running** — close the terminal, the tunnel's gone. Compose's mapping was
+"always on"; this is "on only while I'm actively running it."
+
+**Why the difference exists:** Compose only ever assumes "the outside world" is one laptop, so
+a permanent mapping makes sense. Kubernetes is built for real clusters in all kinds of
+deployments, so it doesn't hard-code one answer for external access — `port-forward` is just
+the simple, always-available option for quick local testing.
+
+**The real, permanent answers, for when many people need to reach in:**
+- **`NodePort`** — opens one port directly on every node's real IP, permanently (no command to
+  keep running). Simple but clunky — node IPs change, ports are ugly (30000-32767 range).
+- **`LoadBalancer`** — the real production standard for public traffic. Kubernetes asks the
+  **cloud provider** (AWS/GCP/Azure) to provision a real load balancer with a stable public
+  address that spreads traffic across healthy Pods. Requires a real cloud provider behind the
+  cluster — a local `kind` cluster has nothing to ask, so this would sit `<pending>` forever
+  here.
+- **`Ingress`** — one layer above Services, for HTTP/HTTPS specifically: routes different
+  domains/paths (`api.company.com`, `dashboard.company.com`) to different Services behind one
+  shared entry point, handles TLS in one place. What most real companies use for web traffic.
+
+**Interview line:** "Locally, I used `kubectl port-forward` for testing, since ClusterIP
+Services aren't reachable from outside the cluster by design. In real production, that's a
+`LoadBalancer` or `Ingress` instead — permanent, for many users, provisioned by the cloud
+provider — the same distinction as liveness vs. readiness earlier: a quick manual tool for
+development versus the standing, automatic mechanism production actually needs."
