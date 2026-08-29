@@ -19,7 +19,12 @@ spec:
           env:
             - name: REDIS_ADDR
               value: redis:6379
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_PASSWORD
             - name: POSTGRES_URL
-              value: postgres://postgres:postgres@postgres:5432/telemetry?sslmode=disable
+              value: postgres://postgres:$(POSTGRES_PASSWORD)@postgres:5432/telemetry?sslmode=disable
             - name: MINIO_ENDPOINT
               value: minio:9000
