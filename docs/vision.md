@@ -75,14 +75,20 @@ an interview.
 ✅ Worker: also write raw payloads to object storage      (done — MinIO/S3, data-lake pattern)
 ✅ Docker Compose (one-command run)                       (Week 2 — done! whole stack, one command)
 ✅ Consumer groups + acknowledgment (crash recovery)       (done — XReadGroup + XAck)
-✅ Load test → the NUMBERS (~55K ev/s, p99 <2ms, ~7× vs per-dial)  (done — Go load-gen)
-⬜ Grafana dashboards + alert
+✅ Load test → the NUMBERS (~55K ev/s, p99 <2ms, ~7× vs per-dial)  (done — Go load-gen, not k6)
+✅ Prometheus + Grafana dashboards + one real alert        (done — proven firing against real saturation)
 ✅ Chaos test → resilience story                           (done — killed worker, zero data loss)
-⬜ K8s + README + demo video + final resume bullets
+✅ Kubernetes — 3-node cluster, full pipeline, self-healing (done — proven end-to-end via port-forward)
+⬜ README + demo video + final resume bullets
 ```
 
-The pool — the hardest, most impressive part — is essentially built. The "toy demo"
-feeling ends the moment real telemetry flows through the pool.
+The pool — the hardest, most impressive part — is built, instrumented, and proven under real
+saturation. The "toy demo" feeling ended the moment real telemetry flowed through the pool;
+what's left now is telling the story well, not building more of it.
 
 **Week 2 complete:** the entire pipeline now runs from a single `docker compose up`, with
 real KITTI telemetry flowing simulator → ingestion → pool → Redis → worker → Postgres + MinIO.
+
+**Week 3 complete:** Prometheus/Grafana with a real, proven-firing alert, and the full 7-service
+pipeline running self-healing on a real 3-node Kubernetes cluster. Only the "told well" work
+(README, demo video, final resume bullets) remains.
