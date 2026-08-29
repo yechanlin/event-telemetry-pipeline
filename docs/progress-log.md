@@ -361,3 +361,58 @@ configured: real metrics → real scraping → real durable storage → real das
 alert rule that has now actually fired against genuine saturation of the live service.
 
 **Next up:** a minimal **Kubernetes** deployment.
+
+---
+
+## 2026-08-25 — Deployed the full pipeline to a real 3-node Kubernetes cluster
+- Chose **Docker Desktop's built-in `kind`** (Kubernetes-in-Docker) over the simpler
+  single-node Kubeadm option, deliberately trading a little setup friction (enabling the
+  containerd image store) for something more realistic and more recognizable in an
+  interview: a genuine **3-node cluster** (1 control-plane + 2 workers), each node really a
+  separate container, letting Kubernetes' scheduler actually make real placement decisions
+  instead of trivially running everything on one machine.
+- Learned and applied the core model from scratch: **Node** (a machine) → **Pod** (one
+  running container, wrapped) → **Deployment** (a standing rule: always keep N replicas,
+  self-healing) → **Service** (a stable virtual IP, from a completely separate address range
+  than Pods, that keeps routing to whichever real Pod currently exists).
+- **Proved self-healing live**: deleted the running `redis` Pod directly; the Deployment
+  noticed and replaced it automatically, landing on a *different* node with a new IP —
+  while the Service's IP never changed. Real proof, not just the concept described.
+- Translated all 7 `docker-compose.yml` services into `k8s/*.yaml` manifests (Deployment +
+  Service each), introducing exactly the new pieces each one needed and nothing more:
+  - **`redis`** — the baseline pattern.
+  - **`postgres`, `minio`** — env vars, then **Secrets** (`kubectl create secret`, never
+    committed to git) for their passwords instead of plaintext, referenced via
+    `valueFrom.secretKeyRef`. Also composed a password into a larger connection string
+    (`worker`'s `POSTGRES_URL`) using `$(POSTGRES_PASSWORD)` substitution, closing a gap
+    that would've left the real password sitting in the committed YAML otherwise.
+  - **`ingestion`, `worker`** — your own locally-built images, not from a registry.
+    `imagePullPolicy: IfNotPresent` worked without any extra step, because the "use
+    containerd for pulling and storing images" setting (enabled earlier when choosing
+    `kind`) unifies Docker's and Kubernetes' image storage into one shared location.
+    Discussed the honest real-production alternative: push to an actual registry
+    (Docker Hub, GHCR, ECR) and reference the full registry path, since real separate
+    machines share no local disk to fall back on the way this one Mac did. `worker` needs
+    **no Service** at all — it never accepts inbound connections, same as its
+    `docker-compose.yml` entry has no `ports:`.
+  - **`prometheus`, `grafana`** — introduced **ConfigMap** for their config files
+    (`prometheus.yml`, Grafana's datasource provisioning) — the Kubernetes equivalent of
+    the bind mounts in `docker-compose.yml`, since a Pod could land on any of the 3 nodes.
+- **Verified correctness through logs, not just "Running" status**: `ingestion`'s log
+  showed `connection pool ready: 5 connections to Redis` (proving `redis:6379` DNS
+  resolution worked); `worker`'s log showed it reached the "started in group workers" line,
+  which only prints after Postgres connection + table creation, MinIO bucket setup, *and*
+  Redis consumer group setup all succeeded — one line quietly proving three separate pieces
+  of wiring, including the `$(POSTGRES_PASSWORD)` substitution.
+- **Honest stated gaps, not glossed over:** no `PersistentVolume` for Prometheus/Grafana
+  data in Kubernetes (a restart loses history, unlike the `docker-compose.yml` version,
+  which does have named volumes for both); registry-based image distribution not actually
+  implemented, only discussed as the real-production answer.
+
+All 7 Pods (`redis`, `postgres`, `minio`, `ingestion`, `worker`, `prometheus`, `grafana`)
+running, `1/1 Running`, spread across both worker nodes — the complete pipeline, self-healing,
+on a real multi-node Kubernetes cluster.
+
+**Next up:** prove the pipeline end-to-end on Kubernetes (simulator → `kubectl port-forward`
+→ real events flowing through), then README rewrite (real AV-telemetry framing, real
+measured numbers, drop the stale "k6" references), demo video, final resume bullets.
