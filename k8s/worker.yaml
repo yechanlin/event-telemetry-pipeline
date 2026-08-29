@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+    spec:
+      containers:
+        - name: worker
+          image: event-telemetry-pipeline-worker:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: REDIS_ADDR
+              value: redis:6379
+            - name: POSTGRES_URL
+              value: postgres://postgres:postgres@postgres:5432/telemetry?sslmode=disable
+            - name: MINIO_ENDPOINT
+              value: minio:9000
